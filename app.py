@@ -3,147 +3,101 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# ==============================================================================
-# 1. 물리 상수 세팅 (K-PROTOCOL)
-# ==============================================================================
-C_K = 297880197.6      
-R_EARTH = 6371000.0    
-G_STD = 9.80665        
-PI_SQ = np.pi ** 2     
+# 1. 절대 물리 상수
+C_K = 297880197.6
+R_EARTH = 6371000.0
+G_STD = 9.80665
+PI_SQ = np.pi ** 2
 
-# ==============================================================================
-# 2. UI 및 페이지 설정
-# ==============================================================================
-st.set_page_config(page_title="K-PROTOCOL 6G Omni Center", layout="wide", page_icon="📡")
+# 2. 기본 UI 설정
+st.set_page_config(page_title="K-PROTOCOL 6G", layout="wide")
+st.title("📡 K-PROTOCOL 6G Omni Center")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #F4F6F9; color: #2C3E50; }
-    .metric-box { background-color: #FFFFFF; padding: 25px; border-left: 6px solid #E74C3C; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 10px 15px rgba(0,0,0,0.05); }
-    .metric-title { font-size: 14px; color: #7F8C8D; font-weight: 800; letter-spacing: 1.5px; }
-    .metric-value { font-size: 32px; font-weight: 900; color: #2C3E50; }
-    .explain-box { background-color: #FFFFFF; padding: 30px; border-left: 6px solid #3498DB; border-radius: 8px; margin-bottom: 30px; }
-    .story-box { background-color: #FFFDF7; border: 2px solid #F1C40F; padding: 25px; border-radius: 12px; margin-bottom: 30px; line-height: 1.8;}
-    .highlight { color: #E74C3C; font-weight: 900; background-color: #FDEDEC; padding: 2px 6px; border-radius: 4px; }
-    </style>
-    """, unsafe_allow_html=True)
+# 언어 선택
+lang = st.radio("Language", ["KOR", "ENG"], horizontal=True)
 
-col_title, col_lang = st.columns([8, 1])
-with col_lang:
-    lang = st.radio("Lang", ["KOR", "ENG"], horizontal=True, label_visibility="collapsed")
+# 3. 사이드바 업로드
+st.sidebar.header("Upload Data")
+f_cell = st.sidebar.file_uploader("1. Cell Data (CSV/Parquet)", type=["csv", "parquet"])
+f_meas = st.sidebar.file_uploader("2. Meas Data (CSV/Parquet)", type=["csv", "parquet"])
 
-if lang == "KOR":
-    st.markdown("# 📡 K-PROTOCOL: 6G Omni Analysis Center")
-    st.markdown("#### 도심 공간 왜곡의 기하학적 환영을 99.999% 제거하는 절대 척도 엔진")
-else:
-    st.markdown("# 📡 K-PROTOCOL: 6G Omni Analysis Center")
-    st.markdown("#### Absolute Metric Engine eliminating 99.999% of geometric illusions")
-
-st.divider()
-
-# ==============================================================================
-# 3. 데이터 로드 및 결합 (초강력 방탄 로직)
-# ==============================================================================
-st.sidebar.header("📂 Data Upload")
-cell_file = st.sidebar.file_uploader("1. Cell Data (csv, parquet)", type=["csv", "parquet"])
-meas_file = st.sidebar.file_uploader("2. Meas Data (csv, parquet)", type=["csv", "parquet"])
-
-def safe_load(f):
+def load(f):
     if f is None: return None
-    try:
-        f.seek(0)
-        return pd.read_parquet(f) if f.name.endswith('.parquet') else pd.read_csv(f)
-    except Exception as e:
-        st.sidebar.error(f"Load Error: {e}")
-        return None
+    f.seek(0)
+    return pd.read_parquet(f) if f.name.endswith('parquet') else pd.read_csv(f)
 
-if cell_file and meas_file:
-    df_c = safe_load(cell_file)
-    df_m = safe_load(meas_file)
+if f_cell and f_meas:
+    df_c = load(f_cell)
+    df_m = load(f_meas)
     
-    if df_c is not None and df_m is not None:
-        # 컬럼 스캔
-        time_col = next((c for c in df_m.columns if str(c).lower() in ['timestamp', 'time', 'time_ns', 'toa']), None)
-        id_col = next((c for c in ['cell_id_dummy', 'cell_id', 'gnb_id_dummy'] if c in df_c.columns and c in df_m.columns), None)
+    # 컬럼 자동 탐지
+    time_col = next((c for c in df_m.columns if str(c).lower() in ['timestamp', 'time', 'time_ns', 'toa']), None)
+    id_col = next((c for c in ['cell_id_dummy', 'cell_id', 'gnb_id_dummy'] if c in df_c.columns and c in df_m.columns), None)
 
-        if time_col and id_col:
+    if time_col and id_col:
+        # 💡 [핵심 패치] 결측치(NA)가 있어도 절대 에러가 나지 않는 판다스 전용 문자열 처리(.str)
+        df_c[id_col] = df_c[id_col].astype(str).str.split('.').str[0].str.strip()
+        df_m[id_col] = df_m[id_col].astype(str).str.split('.').str[0].str.strip()
+        
+        # 'nan' 문자열로 변환된 쓰레기값 진짜 NaN으로 복구
+        df_c[id_col] = df_c[id_col].replace('nan', np.nan)
+        df_m[id_col] = df_m[id_col].replace('nan', np.nan)
+        
+        # 숫자 변환
+        df_c['height_m'] = pd.to_numeric(df_c['height_m'], errors='coerce')
+        df_m[time_col] = pd.to_numeric(df_m[time_col], errors='coerce')
+        
+        # 💡 병합 전 유효한 데이터만 싹 걸러내기 (에러 완벽 차단)
+        df_c_clean = df_c.dropna(subset=['height_m', id_col]).copy()
+        df_m_clean = df_m.dropna(subset=[time_col, id_col]).copy()
+        
+        # 병합 및 연산
+        df = pd.merge(df_m_clean, df_c_clean, on=id_col, how='inner')
+        
+        if not df.empty:
+            # K-PROTOCOL 공식 적용
+            df['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df['height_m'])) ** 2)
+            df['S_loc'] = PI_SQ / df['g_loc']
             
-            # 💡 [핵심 패치 1] 가장 원시적이고 확실한 ID 통일 (정규식/함수 충돌 완전 제거)
-            # 숫자 1.0 이든 문자 "1"이든 무조건 문자열로 바꾼 뒤 소수점 이하는 잘라버림
-            df_c[id_col] = df_c[id_col].astype(str).apply(lambda x: x.split('.')[0].strip())
-            df_m[id_col] = df_m[id_col].astype(str).apply(lambda x: x.split('.')[0].strip())
-            
-            # 💡 [핵심 패치 2] 숫자 강제 변환 (에러 무시 옵션 대신 NaN 처리 후 삭제)
-            df_c['height_m'] = pd.to_numeric(df_c.get('height_m', np.nan), errors='coerce')
-            df_m[time_col] = pd.to_numeric(df_m[time_col], errors='coerce')
-            
-            df_c = df_c.dropna(subset=['height_m', id_col])
-            df_m = df_m.dropna(subset=[time_col, id_col])
-            
-            # 공통 컬럼 제거 (ID 제외) 후 병합
-            common_cols = list(set(df_m.columns) & set(df_c.columns) - {id_col})
-            df_m_clean = df_m.drop(columns=common_cols)
-            df = pd.merge(df_m_clean, df_c, on=id_col, how='inner')
-            
+            df['SI_Dist'] = 299792458.0 * (df[time_col] * 1e-9)
+            df['K_Dist'] = (C_K * df[time_col] * 1e-9) / df['S_loc']
+            df['Error_m'] = (df['SI_Dist'] - df['K_Dist']).abs()
+
+            # 빈 값 다시 한번 청소
+            df = df.dropna(subset=['Error_m'])
+
             if not df.empty:
+                # 결과 브리핑
+                best = df.sort_values('Error_m', ascending=False).iloc[0]
+                st.success("✅ Analysis Complete!")
                 
-                # ==============================================================
-                # 4. K-PROTOCOL 연산 코어
-                # ==============================================================
-                df['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df['height_m'])) ** 2)
-                df['S_loc'] = PI_SQ / df['g_loc']
-                df['SI_Dist'] = 299792458.0 * (df[time_col] * 1e-9)
-                df['K_Dist'] = (C_K * df[time_col] * 1e-9) / df['S_loc']
-                df['Correction'] = (df['SI_Dist'] - df['K_Dist']).abs()
-                
-                df = df.dropna(subset=['Correction']).copy()
-                
-                if not df.empty:
-                    
-                    # ==============================================================
-                    # 5. 결과 시각화 및 대시보드
-                    # ==============================================================
-                    best = df.sort_values('Correction', ascending=False).iloc[0]
-                    
-                    st.markdown('<div class="story-box">', unsafe_allow_html=True)
-                    if lang == "KOR":
-                        st.markdown(f"### 🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명")
-                        st.markdown(f"가장 왜곡이 심한 기지국(ID: **{best[id_col]}**)은 고도 **{best['height_m']:.1f}m**에 위치합니다. 기존 SI 미터법은 **<span class='highlight'>{best['Correction']:.4f} m</span>**라는 치명적인 거품 오차를 발생시켰으나, K-PROTOCOL이 이를 완벽히 보정했습니다.", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"### 🚨 SI Limits & K-PROTOCOL Calibration")
-                        st.markdown(f"The most distorted cell (ID: **{best[id_col]}**) is at **{best['height_m']:.1f}m** altitude. K-PROTOCOL successfully extracted a severe error bubble of **<span class='highlight'>{best['Correction']:.4f} m</span>** generated by the SI metric.", unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                    c1, c2, c3 = st.columns(3)
-                    c1.markdown(f'<div class="metric-box"><div class="metric-title">{"분석된 기지국" if lang=="KOR" else "Analyzed Cells"}</div><div class="metric-value">{df[id_col].nunique()}</div></div>', unsafe_allow_html=True)
-                    c2.markdown(f'<div class="metric-box"><div class="metric-title">{"최대 추출 왜곡량" if lang=="KOR" else "Max Correction"}</div><div class="metric-value">{df["Correction"].max():.4f} m</div></div>', unsafe_allow_html=True)
-                    c3.markdown(f'<div class="metric-box"><div class="metric-title">{"평균 S_loc 지수" if lang=="KOR" else "Avg S_loc"}</div><div class="metric-value">{df["S_loc"].mean():.6f}</div></div>', unsafe_allow_html=True)
-
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.markdown(f"### {'🌐 도심 기지국 3D 지형도' if lang=='KOR' else '🌐 3D Topography'}")
-                        lat = next((c for c in df.columns if 'latitude' in str(c).lower()), None)
-                        lon = next((c for c in df.columns if 'longitude' in str(c).lower()), None)
-                        if lat and lon:
-                            fig3d = px.scatter_3d(df, x=lon, y=lat, z='height_m', color='S_loc', template="plotly_white", color_continuous_scale='Turbo')
-                            fig3d.update_layout(margin=dict(l=0, r=0, b=0, t=0))
-                            st.plotly_chart(fig3d, use_container_width=True)
-                    with col_b:
-                        st.markdown(f"### {'📈 기하학적 환영 증가 추이' if lang=='KOR' else '📈 Geometric Illusion Trend'}")
-                        fig_scat = px.scatter(df.sample(min(5000, len(df))), x='height_m', y='Correction', color='S_loc', trendline="ols", template="plotly_white")
-                        fig_scat.update_layout(margin=dict(l=0, r=0, b=0, t=0))
-                        st.plotly_chart(fig_scat, use_container_width=True)
-
-                    st.markdown(f"### {'📄 K-PROTOCOL 정밀 보정 원본 데이터' if lang=='KOR' else '📄 Calibration Data'}")
-                    st.dataframe(df[[id_col, 'height_m', 'S_loc', time_col, 'SI_Dist', 'K_Dist', 'Correction']].head(1000).style.format({
-                        'height_m': '{:.2f}', 'S_loc': '{:.6f}', 'SI_Dist': '{:.4f}', 'K_Dist': '{:.4f}', 'Correction': '{:.6f}'
-                    }), use_container_width=True)
-
+                # Before & After 스토리
+                if lang == "KOR":
+                    st.info(f"📍 가장 큰 왜곡 발견: 기지국 {best[id_col]} (고도 {best['height_m']:.1f}m)")
+                    st.write(f"기존 방식 오차 **{best['Error_m']:.4f}m**를 K-PROTOCOL 보정으로 완벽히 제거했습니다.")
                 else:
-                    st.error("🚨 연산 후 유효한 데이터가 없습니다." if lang=="KOR" else "🚨 No valid data after computation.")
+                    st.info(f"📍 Max Distortion: Cell {best[id_col]} (Alt {best['height_m']:.1f}m)")
+                    st.write(f"SI Error **{best['Error_m']:.4f}m** has been calibrated by K-PROTOCOL.")
+
+                # 요약 지표
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Analyzed Cells", len(df[id_col].unique()))
+                c2.metric("Max Correction", f"{df['Error_m'].max():.4f} m")
+                c3.metric("Avg S_loc", f"{df['S_loc'].mean():.6f}")
+
+                # 차트
+                st.subheader("Correction Trend")
+                # 버벅임 방지를 위해 2000개만 샘플링하여 차트 그리기
+                plot_data = df.sample(min(2000, len(df)))
+                fig = px.scatter(plot_data, x='height_m', y='Error_m', color='S_loc', trendline="ols")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # 데이터 테이블
+                st.subheader("Raw Data (Top 100)")
+                st.dataframe(df[[id_col, 'height_m', 'S_loc', time_col, 'SI_Dist', 'K_Dist', 'Error_m']].head(100))
             else:
-                st.error("🚨 공통 기지국 ID를 기반으로 데이터를 병합할 수 없습니다." if lang=="KOR" else "🚨 Failed to merge data based on Cell ID.")
+                st.error("연산 후 유효한 데이터가 남지 않았습니다.")
         else:
-            st.error("🚨 시간 컬럼 또는 기지국 ID 컬럼을 찾을 수 없습니다." if lang=="KOR" else "🚨 Time or ID column not found.")
-else:
-    st.info("👈 데이터를 업로드해 주세요! / Please upload data." if lang=="KOR" else "👈 Please upload data.")
+            st.error("Matching data not found (공통된 기지국 ID를 찾을 수 없습니다).")
+    else:
+        st.error("Check ID or Time columns (시간 또는 ID 컬럼이 없습니다).")
