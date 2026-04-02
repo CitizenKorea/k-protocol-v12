@@ -44,7 +44,7 @@ i18n = {
         'err_col': "🚨 데이터를 찾을 수 없습니다! (시간 데이터 또는 공통 ID 부재)",
         'err_empty': "🚨 연산 가능한 유효 데이터가 없습니다.",
         'story_title': "🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명",
-        'm_cell': "완벽 분석된 기지국",
+        'm_cell': "분석된 기지국",
         'm_max': "최대 추출 왜곡량",
         'm_avg': "도심 평균 S_loc 지수",
         'c1_title': "🌐 [CASE 1] 도심 기지국 3D 지형도",
@@ -100,45 +100,55 @@ if cell_file and meas_file:
     df_meas = robust_load(meas_file)
     
     if df_cell is not None and df_meas is not None:
-        # ID 및 시간 컬럼 찾기
+        # 시간 컬럼 및 ID 컬럼 자동 탐지
         time_col = next((c for c in df_meas.columns if str(c).lower() in ['timestamp', 'time', 'time_ns', 'toa']), None)
         id_col = next((c for c in ['cell_id_dummy', 'cell_id', 'gnb_id_dummy', 'enb_id'] if c in df_cell.columns and c in df_meas.columns), None)
 
         if time_col and id_col:
-            # 💡 [핵심 패치] 에러 유발 함수 제거 -> 강제 형변환 로직
-            for df in [df_cell, df_meas]:
-                df[id_col] = df[id_col].apply(lambda x: str(x).split('.')[0].strip())
+            # 💡 [핵심 패치] 모든 버전에서 안전한 '강제 문자열 정규화' 로직
+            # 1.0 -> '1', '1' -> '1'로 통일하여 병합 유실 방지
+            def clean_id(x):
+                s = str(x).split('.')[0].strip()
+                return s if s != 'nan' else None
+
+            df_cell[id_col] = df_cell[id_col].apply(clean_id)
+            df_meas[id_col] = df_meas[id_col].apply(clean_id)
             
-            # 숫자 데이터 안전 변환
+            # 숫자 데이터 안전 변환 (errors='coerce'로 잘못된 데이터는 NaN 처리)
             df_cell['height_m'] = pd.to_numeric(df_cell['height_m'], errors='coerce')
             df_meas[time_col] = pd.to_numeric(df_meas[time_col], errors='coerce')
             
-            df_cell = df_cell.dropna(subset=['height_m'])
-            df_meas = df_meas.dropna(subset=[time_col])
+            # 유효한 숫자 데이터만 필터링
+            df_cell = df_cell.dropna(subset=['height_m', id_col])
+            df_meas = df_meas.dropna(subset=[time_col, id_col])
             
-            # 병합
+            # 병합 실행 (Suffix 중복 방지)
             df_merged = pd.merge(df_meas, df_cell, on=id_col, how='inner', suffixes=('', '_dup'))
             
             if not df_merged.empty:
-                # K-PROTOCOL 연산
+                # K-PROTOCOL 물리 연산
                 df_merged['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df_merged['height_m'])) ** 2)
                 df_merged['S_loc'] = PI_SQ / df_merged['g_loc']
                 df_merged['SI_Dist'] = 299792458.0 * (df_merged[time_col] * 1e-9)
                 df_merged['K_Dist'] = (C_K * df_merged[time_col] * 1e-9) / df_merged['S_loc']
                 df_merged['Correction'] = (df_merged['SI_Dist'] - df_merged['K_Dist']).abs()
                 
-                # 결과 출력
+                # 결과 스토리텔링 및 대시보드 출력
                 best = df_merged.sort_values('Correction', ascending=False).iloc[0]
                 
                 st.markdown(f'<div class="story-box"><h3>{t["story_title"]}</h3>', unsafe_allow_html=True)
-                st.write(f"가장 왜곡이 심한 기지국(ID: {best[id_col]})은 고도 **{best['height_m']:.1f}m**에 위치합니다.")
-                st.write(f"기존 SI 방식 오차: **{best['Correction']:.4f} m** 를 K-PROTOCOL이 보정했습니다.")
+                if lang == 'KOR':
+                    st.write(f"현재 데이터에서 가장 왜곡이 심한 기지국(ID: **{best[id_col]}**)은 빌딩 고도 **{best['height_m']:.1f}m**에 위치합니다.")
+                    st.write(f"기존 방식 오차 **{best['Correction']:.4f} m** 를 K-PROTOCOL $S_{{loc}}$ 보정으로 완벽히 제거했습니다.")
+                else:
+                    st.write(f"The most distorted cell (ID: **{best[id_col]}**) is located at **{best['height_m']:.1f}m**.")
+                    st.write(f"K-PROTOCOL calibrated the SI error of **{best['Correction']:.4f} m** via $S_{{loc}}$ transformation.")
                 st.markdown('</div>', unsafe_allow_html=True)
 
                 c1, c2, c3 = st.columns(3)
-                c1.metric(t['m_cell'], f"{df_merged[id_col].nunique()} Cells")
-                c2.metric(t['m_max'], f"{df_merged['Correction'].max():.4f} m")
-                c3.metric(t['m_avg'], f"{df_merged['S_loc'].mean():.6f}")
+                c1.markdown(f'<div class="metric-box"><div class="metric-title">{t["m_cell"]}</div><div class="metric-value">{df_merged[id_col].nunique()}</div></div>', unsafe_allow_html=True)
+                c2.markdown(f'<div class="metric-box"><div class="metric-title">{t["m_max"]}</div><div class="metric-value">{df_merged["Correction"].max():.4f} m</div></div>', unsafe_allow_html=True)
+                c3.markdown(f'<div class="metric-box"><div class="metric-title">{t["m_avg"]}</div><div class="metric-value">{df_merged["S_loc"].mean():.6f}</div></div>', unsafe_allow_html=True)
 
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -146,13 +156,16 @@ if cell_file and meas_file:
                     lat = next((c for c in df_merged.columns if 'latitude' in str(c).lower()), None)
                     lon = next((c for c in df_merged.columns if 'longitude' in str(c).lower()), None)
                     if lat and lon:
-                        st.plotly_chart(px.scatter_3d(df_merged, x=lon, y=lat, z='height_m', color='S_loc', template="plotly_white"), use_container_width=True)
+                        fig3d = px.scatter_3d(df_merged, x=lon, y=lat, z='height_m', color='S_loc', color_continuous_scale='Turbo', template="plotly_white")
+                        fig3d.update_layout(margin=dict(l=0,r=0,b=0,t=0))
+                        st.plotly_chart(fig3d, use_container_width=True)
                 with col_b:
                     st.subheader(t['c2_title'])
-                    st.plotly_chart(px.scatter(df_merged.sample(min(2000, len(df_merged))), x='height_m', y='Correction', trendline="ols", template="plotly_white"), use_container_width=True)
+                    fig_scat = px.scatter(df_merged.sample(min(3000, len(df_merged))), x='height_m', y='Correction', color='S_loc', trendline="ols", template="plotly_white")
+                    st.plotly_chart(fig_scat, use_container_width=True)
 
                 st.subheader(t['tbl_title'])
-                st.dataframe(df_merged.head(100), use_container_width=True)
+                st.dataframe(df_merged[[id_col, 'height_m', 'S_loc', time_col, 'SI_Dist', 'K_Dist', 'Correction']].head(100), use_container_width=True)
             else:
                 st.error(t['err_empty'])
         else:
