@@ -21,18 +21,17 @@ st.markdown("""
 
 st.title("📡 K-PROTOCOL 6G Omni Center")
 
-# 사이드바 1: 데이터 업로드
 st.sidebar.header("📂 1단계: 데이터 업로드")
 f_cell = st.sidebar.file_uploader("1. 기지국 데이터", type=["csv", "parquet"])
 f_meas = st.sidebar.file_uploader("2. 측정 데이터", type=["csv", "parquet"])
 
+@st.cache_data
 def load(f):
     if f is None: return None
     f.seek(0)
     return pd.read_parquet(f) if f.name.endswith('parquet') else pd.read_csv(f)
 
-# 컬럼 기본값 자동 찾기 도우미
-def find_idx(cols, keywords):
+def get_idx(cols, keywords):
     for i, c in enumerate(cols):
         if any(k in str(c).lower() for k in keywords): return i
     return 0
@@ -43,32 +42,43 @@ if f_cell and f_meas:
     
     st.sidebar.divider()
     st.sidebar.header("⚙️ 2단계: 컬럼 직접 매칭")
-    st.sidebar.info("자동으로 선택된 컬럼이 맞는지 확인해 주세요! (특히 측정 시간이 날짜가 아닌 '숫자' 컬럼인지 확인!)")
+    st.sidebar.info("💡 아래 두 개의 ID 컬럼 이름이 **같아야** 파일이 합쳐집니다!")
     
-    # 💡 [핵심 패치] 사용자가 직접 정확한 컬럼을 선택할 수 있는 드롭다운 메뉴
-    id_c_col = st.sidebar.selectbox("🏢 기지국 파일의 ID 컬럼", df_c.columns, index=find_idx(df_c.columns, ['id', 'cell']))
-    h_col = st.sidebar.selectbox("🏢 기지국 고도(Z) 컬럼", df_c.columns, index=find_idx(df_c.columns, ['height', 'alt', 'z']))
+    id_c_col = st.sidebar.selectbox("🏢 기지국 파일의 ID 컬럼", df_c.columns, index=get_idx(df_c.columns, ['gnb_id', 'cell_id', 'id']))
+    h_col = st.sidebar.selectbox("🏢 기지국 고도(Z) 컬럼", df_c.columns, index=get_idx(df_c.columns, ['height', 'alt', 'z']))
     
-    id_m_col = st.sidebar.selectbox("📡 측정 파일의 ID 컬럼", df_m.columns, index=find_idx(df_m.columns, ['id', 'cell']))
-    t_col = st.sidebar.selectbox("📡 전파 도달 시간(ns) 컬럼", df_m.columns, index=find_idx(df_m.columns, ['time_ns', 'toa', 'time']))
+    # 💡 기지국 ID와 똑같은 이름의 컬럼이 측정 파일에 있으면 그걸 기본값으로 찰떡같이 세팅!
+    m_id_default = df_m.columns.tolist().index(id_c_col) if id_c_col in df_m.columns else get_idx(df_m.columns, ['gnb_id', 'cell_id', 'id'])
+    id_m_col = st.sidebar.selectbox("📡 측정 파일의 ID 컬럼", df_m.columns, index=m_id_default)
+    t_col = st.sidebar.selectbox("📡 전파 도달 시간 컬럼", df_m.columns, index=get_idx(df_m.columns, ['time', 'toa', 'stamp']))
 
-    # 연산용 데이터 복사본 생성
     df_c_work = df_c[[id_c_col, h_col]].copy()
     df_m_work = df_m[[id_m_col, t_col]].copy()
 
-    # 💡 ID에서 순수 숫자만 추출 (예: 'Cell_1.0' -> '1')
+    # 문자열에서 숫자만 추출
     df_c_work['join_id'] = df_c_work[id_c_col].astype(str).str.extract(r'(\d+)')[0]
     df_m_work['join_id'] = df_m_work[id_m_col].astype(str).str.extract(r'(\d+)')[0]
 
-    # 숫자 데이터 강제 변환
-    df_c_work[h_col] = pd.to_numeric(df_c_work[h_col], errors='coerce')
-    df_m_work[t_col] = pd.to_numeric(df_m_work[t_col], errors='coerce')
+    # 💡 [핵심 패치] 콜론(:)이 섞인 27:11.5 같은 시간 데이터를 살려내는 완벽 파싱기!
+    def parse_time(val):
+        v = str(val).strip()
+        if ':' in v:
+            try:
+                p = v.split(':')
+                return float(p[0]) * 60 + float(p[1]) # 분:초 -> 초 변환
+            except:
+                return np.nan
+        try:
+            return float(v)
+        except:
+            return np.nan
 
-    # 결측치(NaN) 제거
+    df_m_work[t_col] = df_m_work[t_col].apply(parse_time)
+    df_c_work[h_col] = pd.to_numeric(df_c_work[h_col], errors='coerce')
+
     df_c_clean = df_c_work.dropna(subset=[h_col, 'join_id'])
     df_m_clean = df_m_work.dropna(subset=[t_col, 'join_id'])
 
-    # 대망의 병합!
     df = pd.merge(df_m_clean, df_c_clean, on='join_id', how='inner')
 
     if not df.empty:
@@ -86,9 +96,9 @@ if f_cell and f_meas:
             best = df.sort_values('Correction', ascending=False).iloc[0]
 
             st.markdown('<div style="background-color: #FFFDF7; border: 2px solid #F1C40F; padding: 25px; border-radius: 12px; margin-bottom: 30px;">', unsafe_allow_html=True)
-            st.markdown(f"### 🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명")
+            st.markdown("### 🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명")
             st.info(f"📍 가장 큰 왜곡 발견: 기지국 ID **{best['join_id']}** (고도 {best[h_col]:.1f}m)")
-            st.write(f"기존 방식 오차 **{best['Correction']:.4f}m**를 K-PROTOCOL 보정으로 완벽히 제거했습니다.")
+            st.write(f"기존 방식 오차 **{best['Correction']:,.4f}m**를 K-PROTOCOL 보정으로 완벽히 제거했습니다.")
             st.markdown('</div>', unsafe_allow_html=True)
 
             c1, c2, c3 = st.columns(3)
