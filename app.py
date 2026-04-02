@@ -42,7 +42,6 @@ i18n = {
         'sb_info': "비엔나 데이터셋 파일을 아래에 순서대로 드래그 앤 드롭해 주세요.",
         'file1': "1. 기지국 데이터 (cell_info_final...)",
         'file2': "2. 측정 데이터 (scanner_measurements...)",
-        'loading': "🚀 K-PROTOCOL 엔진이 시공간 좌표를 추적 중입니다...",
         'err_col': "데이터 결합을 위한 'cell_id_dummy' 또는 시간 컬럼을 찾을 수 없습니다.",
         'story_title': "🚨 기존 SI 미터법의 한계와 K-PROTOCOL의 완벽한 보정 증명",
         'm_cell': "분석된 6G 기지국",
@@ -65,7 +64,6 @@ i18n = {
         'sb_info': "Drag and drop the Vienna dataset files below in order.",
         'file1': "1. Base Station Data (cell_info_final...)",
         'file2': "2. Measurement Data (scanner_measurements...)",
-        'loading': "🚀 K-PROTOCOL engine is tracking spacetime coordinates...",
         'err_col': "Cannot find 'cell_id_dummy' or time column for data merging.",
         'story_title': "🚨 Limits of the SI Metric & Perfect Calibration by K-PROTOCOL",
         'm_cell': "Analyzed 6G Cells",
@@ -86,10 +84,9 @@ i18n = {
 # ==========================================
 col_title, col_lang = st.columns([8, 1])
 with col_lang:
-    # 한/영 라디오 버튼
     lang = st.radio("Language / 언어", ["KOR", "ENG"], horizontal=True, label_visibility="collapsed")
 
-t = i18n[lang] # 선택된 언어 사전 불러오기
+t = i18n[lang]
 
 with col_title:
     st.markdown(f"# {t['title']}")
@@ -114,7 +111,7 @@ def load_uploaded_file(uploaded_file):
             return pd.read_parquet(uploaded_file, engine='pyarrow')
         return pd.read_csv(uploaded_file)
     except Exception as e:
-        st.sidebar.error(f"Error: {e}")
+        st.sidebar.error(f"Error reading file: {e}")
         return None
 
 # ==========================================
@@ -125,23 +122,37 @@ if cell_file and meas_file:
     df_meas = load_uploaded_file(meas_file)
     
     if df_cell is not None and df_meas is not None:
+        # 안전장치 1: 고도 데이터 숫자형 강제 변환
         if 'height_m' in df_cell.columns:
             df_cell['height_m'] = pd.to_numeric(df_cell['height_m'], errors='coerce')
             df_cell = df_cell.dropna(subset=['height_m']).copy()
             
-        time_col = next((c for c in df_meas.columns if c in ['timestamp', 'time', 'time_ns']), None)
-        if time_col:
-            df_meas[time_col] = pd.to_numeric(df_meas[time_col], errors='coerce')
+        # 안전장치 2: 대소문자 무시하고 시간 컬럼 이름만 완벽하게 추출
+        time_col_name = None
+        for c in df_meas.columns:
+            if str(c).lower() in ['timestamp', 'time', 'time_ns', 'toa']:
+                time_col_name = str(c)
+                break
+                
+        # 안전장치 3: 추출된 시간 컬럼의 데이터를 숫자로 변환
+        if time_col_name is not None:
+            df_meas[time_col_name] = pd.to_numeric(df_meas[time_col_name], errors='coerce')
         
-        if time_col and 'cell_id_dummy' in df_cell.columns and 'cell_id_dummy' in df_meas.columns:
+        # 안전장치 4: Series 에러를 원천 차단하는 분리형 참/거짓 판별기
+        is_time_ready = isinstance(time_col_name, str)
+        is_cell_ready = ('cell_id_dummy' in df_cell.columns) and ('cell_id_dummy' in df_meas.columns)
+        
+        # 절대 고장나지 않는 깨끗한 조건문
+        if is_time_ready and is_cell_ready:
+            
             # --- 1단계: K-PROTOCOL 엔진 연산 ---
             df_cell['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df_cell['height_m'])) ** 2)
             df_cell['S_loc'] = PI_SQ / df_cell['g_loc']
             
             df_merged = pd.merge(df_meas, df_cell, on='cell_id_dummy', how='inner')
             
-            df_merged['SI_Dist'] = 299792458.0 * (df_merged[time_col] * 1e-9)
-            df_merged['K_Dist'] = (C_K * df_merged[time_col] * 1e-9) / df_merged['S_loc']
+            df_merged['SI_Dist'] = 299792458.0 * (df_merged[time_col_name] * 1e-9)
+            df_merged['K_Dist'] = (C_K * df_merged[time_col_name] * 1e-9) / df_merged['S_loc']
             df_merged['Correction'] = np.abs(df_merged['SI_Dist'] - df_merged['K_Dist'])
 
             # ==========================================
@@ -155,7 +166,7 @@ if cell_file and meas_file:
             if lang == 'KOR':
                 st.markdown(f"""
                 이 데이터셋에서 **가장 왜곡이 심한 기지국(ID: {int(max_err_row['cell_id_dummy'])})**은 지상으로부터 **{max_err_row['height_m']:.1f}m** 고도에 위치해 있습니다. 
-                해당 기지국에서 수신된 전파 도달 시간({max_err_row[time_col]:.0f} ns)을 바탕으로 거리를 역산해 보았습니다.
+                해당 기지국에서 수신된 전파 도달 시간({max_err_row[time_col_name]:.0f} ns)을 바탕으로 거리를 역산해 보았습니다.
                 * ❌ **Before (기존 방식):** 주류 학계의 절대상수($c = 299,792,458$)를 쓰면 **{max_err_row['SI_Dist']:,.4f} m**가 나옵니다. 고도 왜곡이 반영되지 않은 **허구의 거리**입니다.
                 * ⭕ **After (K-PROTOCOL):** $S_{loc}$({max_err_row['S_loc']:.6f}) 지수를 적용해 시공간의 척도를 보정하면 **{max_err_row['K_Dist']:,.4f} m**라는 진짜 거리가 도출됩니다.
                 
@@ -164,7 +175,7 @@ if cell_file and meas_file:
             else:
                 st.markdown(f"""
                 In this dataset, the **most distorted base station (ID: {int(max_err_row['cell_id_dummy'])})** is located at an altitude of **{max_err_row['height_m']:.1f}m**. 
-                Based on the signal Time-of-Arrival ({max_err_row[time_col]:.0f} ns), we calculated the distance:
+                Based on the signal Time-of-Arrival ({max_err_row[time_col_name]:.0f} ns), we calculated the distance:
                 * ❌ **Before (SI Method):** Using the mainstream constant ($c = 299,792,458$) yields **{max_err_row['SI_Dist']:,.4f} m**. This is a **fictional distance** ignoring altitude distortion.
                 * ⭕ **After (K-PROTOCOL):** Applying the $S_{loc}$ ({max_err_row['S_loc']:.6f}) index to calibrate the metric yields the true physical distance of **{max_err_row['K_Dist']:,.4f} m**.
                 
@@ -209,7 +220,7 @@ if cell_file and meas_file:
 
             # --- 데이터 테이블 ---
             st.markdown(f"### {t['tbl_title']}")
-            display_cols = ['cell_id_dummy', 'height_m', 'S_loc', time_col, 'SI_Dist', 'K_Dist', 'Correction']
+            display_cols = ['cell_id_dummy', 'height_m', 'S_loc', time_col_name, 'SI_Dist', 'K_Dist', 'Correction']
             
             display_df = df_merged[display_cols].head(100).rename(columns={
                 'SI_Dist': t['col_si'], 
