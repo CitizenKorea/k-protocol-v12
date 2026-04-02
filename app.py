@@ -10,77 +10,113 @@ G_STD = 9.80665
 PI_SQ = np.pi ** 2
 
 st.set_page_config(page_title="K-PROTOCOL 6G", layout="wide")
+
+st.markdown("""
+    <style>
+    .metric-box { background-color: #FFFFFF; padding: 25px; border-left: 6px solid #E74C3C; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .metric-title { font-size: 14px; color: #7F8C8D; font-weight: 800; }
+    .metric-value { font-size: 32px; font-weight: 900; color: #2C3E50; }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.title("📡 K-PROTOCOL 6G Omni Center")
 
-st.sidebar.header("📂 Data Upload")
-f_cell = st.sidebar.file_uploader("1. Cell Data", type=["csv", "parquet"])
-f_meas = st.sidebar.file_uploader("2. Meas Data", type=["csv", "parquet"])
+# 사이드바 1: 데이터 업로드
+st.sidebar.header("📂 1단계: 데이터 업로드")
+f_cell = st.sidebar.file_uploader("1. 기지국 데이터", type=["csv", "parquet"])
+f_meas = st.sidebar.file_uploader("2. 측정 데이터", type=["csv", "parquet"])
 
 def load(f):
     if f is None: return None
     f.seek(0)
     return pd.read_parquet(f) if f.name.endswith('parquet') else pd.read_csv(f)
 
+# 컬럼 기본값 자동 찾기 도우미
+def find_idx(cols, keywords):
+    for i, c in enumerate(cols):
+        if any(k in str(c).lower() for k in keywords): return i
+    return 0
+
 if f_cell and f_meas:
     df_c = load(f_cell)
     df_m = load(f_meas)
     
-    # [핵심 1] 유연한 컬럼 탐지기 (대소문자, 이름 섞임 완벽 방어)
-    time_col = next((c for c in df_m.columns if 'time' in c.lower() or 'toa' in c.lower() or 'stamp' in c.lower()), None)
-    id_col = next((c for c in df_c.columns if 'id' in c.lower() and c in df_m.columns), None)
-    height_col = next((c for c in df_c.columns if 'height' in c.lower() or 'alt' in c.lower() or c.lower() == 'z'), None)
+    st.sidebar.divider()
+    st.sidebar.header("⚙️ 2단계: 컬럼 직접 매칭")
+    st.sidebar.info("자동으로 선택된 컬럼이 맞는지 확인해 주세요! (특히 측정 시간이 날짜가 아닌 '숫자' 컬럼인지 확인!)")
+    
+    # 💡 [핵심 패치] 사용자가 직접 정확한 컬럼을 선택할 수 있는 드롭다운 메뉴
+    id_c_col = st.sidebar.selectbox("🏢 기지국 파일의 ID 컬럼", df_c.columns, index=find_idx(df_c.columns, ['id', 'cell']))
+    h_col = st.sidebar.selectbox("🏢 기지국 고도(Z) 컬럼", df_c.columns, index=find_idx(df_c.columns, ['height', 'alt', 'z']))
+    
+    id_m_col = st.sidebar.selectbox("📡 측정 파일의 ID 컬럼", df_m.columns, index=find_idx(df_m.columns, ['id', 'cell']))
+    t_col = st.sidebar.selectbox("📡 전파 도달 시간(ns) 컬럼", df_m.columns, index=find_idx(df_m.columns, ['time_ns', 'toa', 'time']))
 
-    if time_col and id_col and height_col:
-        # 💡 [핵심 2] 문자열 조작 버리고, 순수 숫자로 강제 통일 (에러 0%)
-        # 1.0 이든 "1" 이든 무조건 같은 숫자 1로 인식하게 만듦
-        df_c[id_col] = pd.to_numeric(df_c[id_col], errors='coerce')
-        df_m[id_col] = pd.to_numeric(df_m[id_col], errors='coerce')
-        
-        df_c[height_col] = pd.to_numeric(df_c[height_col], errors='coerce')
-        df_m[time_col] = pd.to_numeric(df_m[time_col], errors='coerce')
-        
-        # 결측치 제거 후 병합
-        df_c_clean = df_c.dropna(subset=[height_col, id_col])
-        df_m_clean = df_m.dropna(subset=[time_col, id_col])
-        
-        df = pd.merge(df_m_clean, df_c_clean, on=id_col, how='inner')
-        
+    # 연산용 데이터 복사본 생성
+    df_c_work = df_c[[id_c_col, h_col]].copy()
+    df_m_work = df_m[[id_m_col, t_col]].copy()
+
+    # 💡 ID에서 순수 숫자만 추출 (예: 'Cell_1.0' -> '1')
+    df_c_work['join_id'] = df_c_work[id_c_col].astype(str).str.extract(r'(\d+)')[0]
+    df_m_work['join_id'] = df_m_work[id_m_col].astype(str).str.extract(r'(\d+)')[0]
+
+    # 숫자 데이터 강제 변환
+    df_c_work[h_col] = pd.to_numeric(df_c_work[h_col], errors='coerce')
+    df_m_work[t_col] = pd.to_numeric(df_m_work[t_col], errors='coerce')
+
+    # 결측치(NaN) 제거
+    df_c_clean = df_c_work.dropna(subset=[h_col, 'join_id'])
+    df_m_clean = df_m_work.dropna(subset=[t_col, 'join_id'])
+
+    # 대망의 병합!
+    df = pd.merge(df_m_clean, df_c_clean, on='join_id', how='inner')
+
+    if not df.empty:
+        # K-PROTOCOL 물리 연산
+        df['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df[h_col])) ** 2)
+        df['S_loc'] = PI_SQ / df['g_loc']
+        df['SI_Dist'] = 299792458.0 * (df[t_col] * 1e-9)
+        df['K_Dist'] = (C_K * df[t_col] * 1e-9) / df['S_loc']
+        df['Correction'] = (df['SI_Dist'] - df['K_Dist']).abs()
+
+        df = df.dropna(subset=['Correction']).copy()
+
         if not df.empty:
-            # K-PROTOCOL 물리 연산
-            df['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df[height_col])) ** 2)
-            df['S_loc'] = PI_SQ / df['g_loc']
-            df['SI_Dist'] = 299792458.0 * (df[time_col] * 1e-9)
-            df['K_Dist'] = (C_K * df[time_col] * 1e-9) / df['S_loc']
-            df['Correction'] = (df['SI_Dist'] - df['K_Dist']).abs()
-            
-            df = df.dropna(subset=['Correction'])
-            
-            # 시각화 및 결과
             st.success("✅ Analysis Complete!")
             best = df.sort_values('Correction', ascending=False).iloc[0]
-            st.info(f"📍 가장 큰 왜곡: 기지국 ID {best[id_col]} (고도 {best[height_col]:.1f}m) -> 기존 방식 오차 {best['Correction']:.4f}m를 완벽 보정")
-            
+
+            st.markdown('<div style="background-color: #FFFDF7; border: 2px solid #F1C40F; padding: 25px; border-radius: 12px; margin-bottom: 30px;">', unsafe_allow_html=True)
+            st.markdown(f"### 🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명")
+            st.info(f"📍 가장 큰 왜곡 발견: 기지국 ID **{best['join_id']}** (고도 {best[h_col]:.1f}m)")
+            st.write(f"기존 방식 오차 **{best['Correction']:.4f}m**를 K-PROTOCOL 보정으로 완벽히 제거했습니다.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
             c1, c2, c3 = st.columns(3)
-            c1.metric("Analyzed Cells", df[id_col].nunique())
-            c2.metric("Max Correction", f"{df['Correction'].max():.4f} m")
-            c3.metric("Avg S_loc", f"{df['S_loc'].mean():.6f}")
+            c1.metric("분석된 기지국", df['join_id'].nunique())
+            c2.metric("최대 추출 왜곡량", f"{df['Correction'].max():.4f} m")
+            c3.metric("평균 S_loc 지수", f"{df['S_loc'].mean():.6f}")
 
             col_a, col_b = st.columns(2)
             with col_a:
-                lat = next((c for c in df.columns if 'lat' in str(c).lower()), None)
-                lon = next((c for c in df.columns if 'lon' in str(c).lower()), None)
+                st.subheader("🌐 도심 기지국 3D 왜곡 맵")
+                lat = next((c for c in df_c.columns if 'lat' in str(c).lower()), None)
+                lon = next((c for c in df_c.columns if 'lon' in str(c).lower()), None)
                 if lat and lon:
-                    st.plotly_chart(px.scatter_3d(df, x=lon, y=lat, z=height_col, color='S_loc', template="plotly_white", color_continuous_scale='Turbo'), use_container_width=True)
+                    df_plot = df.merge(df_c[[id_c_col, lat, lon]], left_on='join_id', right_on=df_c[id_c_col].astype(str).str.extract(r'(\d+)')[0], how='left')
+                    st.plotly_chart(px.scatter_3d(df_plot, x=lon, y=lat, z=h_col, color='S_loc', template="plotly_white", color_continuous_scale='Turbo'), use_container_width=True)
             with col_b:
-                st.plotly_chart(px.scatter(df.sample(min(2000, len(df))), x=height_col, y='Correction', color='S_loc', trendline="ols", template="plotly_white"), use_container_width=True)
-                
-            st.dataframe(df[[id_col, height_col, 'S_loc', time_col, 'SI_Dist', 'K_Dist', 'Correction']].head(100))
+                st.subheader("📈 기하학적 환영 증가 추이")
+                st.plotly_chart(px.scatter(df.sample(min(2000, len(df))), x=h_col, y='Correction', color='S_loc', trendline="ols", template="plotly_white"), use_container_width=True)
+
+            st.subheader("📄 K-PROTOCOL 정밀 보정 원본 데이터")
+            st.dataframe(df[['join_id', h_col, 'S_loc', t_col, 'SI_Dist', 'K_Dist', 'Correction']].head(100))
         else:
-            # 💡 [핵심 3] X-Ray 디버거 작동! (눈 뜬 장님 탈출)
-            st.error("🚨 두 파일이 합쳐지지 않았습니다! ID 형식이 서로 다릅니다.")
-            col1, col2 = st.columns(2)
-            col1.warning(f"🏢 기지국 파일의 ID 예시:\n {df_c_clean[id_col].unique()[:10]}")
-            col2.warning(f"📡 측정 파일의 ID 예시:\n {df_m_clean[id_col].unique()[:10]}")
-            st.info("👆 위 두 숫자가 어떻게 다른지 확인해 주세요. (예: 한쪽은 NaN이거나 단위가 다름)")
+            st.error("연산 후 유효한 데이터가 없습니다.")
     else:
-        st.error(f"🚨 필수 컬럼을 찾을 수 없습니다! (발견된 컬럼 - 시간: {time_col}, ID: {id_col}, 고도: {height_col})")
+        st.error("🚨 두 파일이 여전히 합쳐지지 않습니다. (왼쪽 사이드바의 컬럼 매칭을 다시 확인해 주세요!)")
+        c1, c2 = st.columns(2)
+        c1.warning(f"🏢 추출된 기지국 ID 예시:\n {df_c_clean['join_id'].unique()[:10]}")
+        c2.warning(f"📡 추출된 측정 파일 ID 예시:\n {df_m_clean['join_id'].unique()[:10]}")
+        st.info("👆 위 두 숫자가 다르거나 빈 칸이라면 사이드바 메뉴에서 다른 컬럼을 선택해 보세요!")
+else:
+    st.info("👈 왼쪽 화면에서 파일을 업로드해 주세요!")
