@@ -3,15 +3,14 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import io
 
 # ==============================================================================
 # 1. K-PROTOCOL Universal Physical Constants
 # ==============================================================================
-C_K = 297880197.6      # 주인님의 위대한 절대 빛의 속도 (m/s)
-R_EARTH = 6371000.0    # 지구 평균 반지름 (m)
-G_STD = 9.80665        # 지표면 표준 중력 (m/s^2)
-PI_SQ = np.pi ** 2     # 파이 제곱 (기하학적 척도 상수)
+C_K = 297880197.6      
+R_EARTH = 6371000.0    
+G_STD = 9.80665        
+PI_SQ = np.pi ** 2     
 
 # ==============================================================================
 # 2. Page Configuration & Premium Custom CSS
@@ -20,49 +19,20 @@ st.set_page_config(page_title="K-PROTOCOL 6G Omni Center", layout="wide", page_i
 
 st.markdown("""
     <style>
-    /* 전체 배경 및 텍스트 톤 */
     .stApp { background-color: #F4F6F9; color: #2C3E50; font-family: 'Helvetica Neue', sans-serif; }
-    
-    /* 대시보드 메트릭 박스 스타일링 */
-    .metric-box { 
-        background-color: #FFFFFF; 
-        padding: 25px; 
-        border-left: 6px solid #E74C3C; 
-        border-radius: 8px; 
-        margin-bottom: 25px; 
-        box-shadow: 0 10px 15px rgba(0,0,0,0.05); 
-        transition: transform 0.2s;
-    }
+    .metric-box { background-color: #FFFFFF; padding: 25px; border-left: 6px solid #E74C3C; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 10px 15px rgba(0,0,0,0.05); transition: transform 0.2s;}
     .metric-box:hover { transform: translateY(-3px); }
     .metric-title { font-size: 14px; color: #7F8C8D; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 5px; }
     .metric-value { font-size: 32px; font-weight: 900; color: #2C3E50; }
-    
-    /* 설명 및 스토리텔링 박스 */
-    .explain-box { 
-        background-color: #FFFFFF; 
-        padding: 30px; 
-        border-left: 6px solid #3498DB; 
-        border-radius: 8px; 
-        margin-bottom: 30px; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
-        line-height: 1.7;
-    }
-    .story-box { 
-        background-color: #FFFDF7; 
-        border: 2px solid #F1C40F; 
-        padding: 25px; 
-        border-radius: 12px; 
-        margin-bottom: 30px; 
-        line-height: 1.8;
-        box-shadow: 0 4px 10px rgba(241,196,15,0.15);
-    }
+    .explain-box { background-color: #FFFFFF; padding: 30px; border-left: 6px solid #3498DB; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); line-height: 1.7;}
+    .story-box { background-color: #FFFDF7; border: 2px solid #F1C40F; padding: 25px; border-radius: 12px; margin-bottom: 30px; line-height: 1.8; box-shadow: 0 4px 10px rgba(241,196,15,0.15);}
     .highlight { color: #E74C3C; font-weight: 900; background-color: #FDEDEC; padding: 2px 6px; border-radius: 4px; }
     .success-text { color: #27AE60; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 3. Bilingual Dictionary (한/영 완벽 지원 엔진)
+# 3. Bilingual Dictionary
 # ==============================================================================
 i18n = {
     'KOR': {
@@ -109,9 +79,6 @@ i18n = {
     }
 }
 
-# ==============================================================================
-# 4. Header & Language Toggle UI
-# ==============================================================================
 col_title, col_lang = st.columns([8, 1])
 with col_lang:
     lang = st.radio("Language / 언어", ["KOR", "ENG"], horizontal=True, label_visibility="collapsed")
@@ -135,10 +102,6 @@ meas_file = st.sidebar.file_uploader(t['file2'], type=["csv", "parquet"])
 
 @st.cache_data
 def safe_load_file(uploaded_file):
-    """
-    스트림릿의 고질적 파일 포인터 에러를 방지하는 안전 로더.
-    seek(0)를 통해 메모리 커서를 초기화합니다.
-    """
     try:
         uploaded_file.seek(0)
         if uploaded_file.name.endswith('.parquet'):
@@ -154,15 +117,11 @@ def safe_load_file(uploaded_file):
 if cell_file and meas_file:
     with st.spinner("🚀 K-PROTOCOL 절대 연산 엔진 가동 중... 데이터 무결성 검증 시작!"):
         
-        # 데이터 안전 로드
         df_cell = safe_load_file(cell_file)
         df_meas = safe_load_file(meas_file)
         
         if df_cell is not None and df_meas is not None:
             
-            # ---------------------------------------------------------
-            # [방어 1] 동적 컬럼 스캐너 (대소문자, 이름 변경 완벽 대응)
-            # ---------------------------------------------------------
             time_col_name = None
             for c in df_meas.columns:
                 if str(c).lower() in ['timestamp', 'time', 'time_ns', 'toa']:
@@ -178,60 +137,38 @@ if cell_file and meas_file:
             if time_col_name and id_col_name:
                 
                 # ---------------------------------------------------------
-                # [방어 2] 줄 수(Row) 유실을 막는 완벽한 ID 형변환
-                # (1과 1.0과 "1"이 다르게 인식되어 드롭되는 현상 원천 차단)
+                # 💡 [핵심 패치] 파이썬 버전 충돌을 막는 100% 텍스트 강제 변환
+                # (to_numeric 함수 제거, 순수 문자열 연산으로 안전성 확보)
                 # ---------------------------------------------------------
-                df_cell[id_col_name] = pd.to_numeric(df_cell[id_col_name], errors='ignore').astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                df_meas[id_col_name] = pd.to_numeric(df_meas[id_col_name], errors='ignore').astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                df_cell[id_col_name] = df_cell[id_col_name].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                df_meas[id_col_name] = df_meas[id_col_name].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 
-                # 필수 숫자 데이터 형변환 및 결측치 방어
                 df_cell['height_m'] = pd.to_numeric(df_cell.get('height_m', np.nan), errors='coerce')
                 df_meas[time_col_name] = pd.to_numeric(df_meas[time_col_name], errors='coerce')
                 
-                # 계산에 꼭 필요한 컬럼의 결측치만 제거 (그 외의 데이터는 최대한 살림)
                 df_cell = df_cell.dropna(subset=['height_m']).copy()
                 df_meas = df_meas.dropna(subset=[time_col_name]).copy()
                 
-                # ---------------------------------------------------------
-                # [방어 3] 공통 쓰레기 컬럼 제거로 인한 병합 꼬임 방지
-                # ---------------------------------------------------------
                 common_cols = set(df_meas.columns).intersection(set(df_cell.columns))
                 cols_to_drop_from_meas = list(common_cols - {id_col_name})
                 df_meas_clean = df_meas.drop(columns=cols_to_drop_from_meas)
                 
-                # 이너 조인 실행 (유실되는 데이터 없음)
                 df_merged = pd.merge(df_meas_clean, df_cell, on=id_col_name, how='inner')
                 
                 if df_merged.empty:
                     st.error(t['err_empty'])
                 else:
-                    # ---------------------------------------------------------
-                    # [연산 코어] K-PROTOCOL 절대 물리 방정식
-                    # ---------------------------------------------------------
-                    # 1. 고도 기반 국소 중력 연산
                     df_merged['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df_merged['height_m'])) ** 2)
-                    
-                    # 2. 기하학적 왜곡 지수 산출
                     df_merged['S_loc'] = PI_SQ / df_merged['g_loc']
-                    
-                    # 3. 기존 거리 vs 보정 절대 거리 연산
                     df_merged['SI_Dist'] = 299792458.0 * (df_merged[time_col_name] * 1e-9)
                     df_merged['K_Dist'] = (C_K * df_merged[time_col_name] * 1e-9) / df_merged['S_loc']
-                    
-                    # 4. 기하학적 환영(잔차) 계산
                     df_merged['Correction'] = (df_merged['SI_Dist'] - df_merged['K_Dist']).abs()
                     
-                    # 무한대 오류 및 쓰레기 값 청소
                     df_merged = df_merged.replace([np.inf, -np.inf], np.nan).dropna(subset=['Correction']).copy()
                     
                     if df_merged.empty:
                         st.error(t['err_empty'])
                     else:
-                        # ---------------------------------------------------------
-                        # [결과 출력] 브리핑, 메트릭, 3D 차트 시각화
-                        # ---------------------------------------------------------
-                        
-                        # 가장 왜곡이 심한 기지국 추출 (안전한 iloc[0] 사용)
                         best_row = df_merged.sort_values('Correction', ascending=False).iloc[0]
                         
                         st.markdown('<div class="story-box">', unsafe_allow_html=True)
@@ -259,7 +196,6 @@ if cell_file and meas_file:
                             """, unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
 
-                        # --- 최상단 대시보드 요약 메트릭 ---
                         c1, c2, c3 = st.columns(3)
                         c1.markdown(f'<div class="metric-box"><div class="metric-title">{t["m_cell"]}</div><div class="metric-value">{df_merged[id_col_name].nunique():,} Cells</div></div>', unsafe_allow_html=True)
                         c2.markdown(f'<div class="metric-box"><div class="metric-title">{t["m_max"]}</div><div class="metric-value">{df_merged["Correction"].max():.4f} m</div></div>', unsafe_allow_html=True)
@@ -267,13 +203,11 @@ if cell_file and meas_file:
 
                         st.divider()
 
-                        # --- 프리미엄 시각화 차트 (좌우 배치) ---
                         col_a, col_b = st.columns(2)
                         with col_a:
                             st.markdown('<div class="explain-box">', unsafe_allow_html=True)
                             st.markdown(f"### {t['c1_title']}")
                             st.caption(t['c1_desc'])
-                            # 위도/경도가 있을 경우에만 3D 차트 렌더링
                             lat_col = next((c for c in df_merged.columns if 'latitude' in str(c).lower()), None)
                             lon_col = next((c for c in df_merged.columns if 'longitude' in str(c).lower()), None)
                             
@@ -295,7 +229,6 @@ if cell_file and meas_file:
                             st.markdown(f"### {t['c2_title']}")
                             st.caption(t['c2_desc'])
                             
-                            # 데이터가 너무 많아 브라우저가 버벅거리는 것을 방지하기 위한 샘플링 처리
                             plot_df = df_merged.sample(n=min(5000, len(df_merged)), random_state=42)
                             
                             fig_scatter = px.scatter(
@@ -308,16 +241,12 @@ if cell_file and meas_file:
                             st.plotly_chart(fig_scatter, use_container_width=True)
                             st.markdown('</div>', unsafe_allow_html=True)
 
-                        # --- 전체 원본 데이터 테이블 출력 ---
                         st.markdown(f"### {t['tbl_title']}")
-                        st.caption("데이터 병합 시 유실을 막기 위해 모든 원본 컬럼을 유지한 최종 보정 테이블입니다.")
                         
-                        # 보기 좋게 중요 컬럼을 맨 앞으로 재배치
                         important_cols = [id_col_name, 'height_m', 'S_loc', time_col_name, 'SI_Dist', 'K_Dist', 'Correction']
                         other_cols = [c for c in df_merged.columns if c not in important_cols]
                         final_display_cols = important_cols + other_cols
                         
-                        # 스타일 적용 후 전체 데이터(최대 1000줄) 렌더링
                         st.dataframe(df_merged[final_display_cols].head(1000).style.format({
                             'height_m': '{:.2f}', 
                             'S_loc': '{:.6f}', 
