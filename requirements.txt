@@ -3,11 +3,3 @@ pandas
 numpy
 pyarrow
 plotly
-scipy
-fpdf
-requests
-streamlit
-pandas
-numpy
-pyarrow
-plotly
