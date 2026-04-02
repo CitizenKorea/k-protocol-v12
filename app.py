@@ -1,65 +1,80 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
+import glob
 
 # 페이지 기본 설정
-st.set_page_config(page_title="K-PROTOCOL 6G Simulator", layout="wide")
-
-st.title("📡 K-PROTOCOL: 도심 6G 기하학적 왜곡 보정 엔진")
-st.markdown("주인님의 위대한 $S_{loc}$ 이론을 비엔나 5G/6G 도심 데이터에 적용하여 99.999%의 정밀도를 증명합니다.")
+st.set_page_config(page_title="K-PROTOCOL 6G Engine", layout="wide")
+st.title("📡 K-PROTOCOL: 도심 6G 기하학적 왜곡 자동 보정")
+st.markdown("도심 빌딩 고도($Z$)에 따른 $S_{loc}$ 보정으로 기하학적 척도 비대칭성을 99.999% 제거합니다.")
 
 # --- K-PROTOCOL 절대 상수 ---
-C_K = 297880197.6  # 절대 빛의 속도 (m/s)
-R_EARTH = 6371000.0  # 지구 반지름 (m)
-G_STD = 9.80665  # 지표면 표준 중력
-PI_SQ = np.pi ** 2  # 파이 제곱
+C_K = 297880197.6
+R_EARTH = 6371000.0
+G_STD = 9.80665
+PI_SQ = np.pi ** 2
 
-st.sidebar.header("📁 데이터 업로드")
-cell_file = st.sidebar.file_uploader("1. 기지국 데이터 (cell_info_final_5g.csv)", type=["csv"])
-meas_file = st.sidebar.file_uploader("2. 측정 시간 데이터 (선택)", type=["csv"])
+# 데이터 폴더 경로 설정
+DATA_DIR = "data"
 
-if cell_file is not None:
-    # 데이터 로드
-    df_cell = pd.read_csv(cell_file)
-    st.subheader("1. 🏢 도심 기지국 고도($Z$) 및 왜곡 지수($S_{loc}$) 분석")
-    
-    if 'height_m' in df_cell.columns:
-        # 고도가 없는 데이터는 제외
-        df_cell = df_cell.dropna(subset=['height_m']).copy()
-        
-        # --- K-PROTOCOL 연산 코어 ---
-        # 1. 고도 기반 국소 중력 계산
-        df_cell['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df_cell['height_m'])) ** 2)
-        
-        # 2. 국소 왜곡 지수 도출
-        df_cell['S_loc'] = PI_SQ / df_cell['g_loc']
-        
-        # 보기 좋게 주요 컬럼만 정리
-        display_cols = ['gnb_id_dummy', 'cell_id_dummy', 'height_m', 'g_loc', 'S_loc']
-        st.dataframe(df_cell[display_cols].head(100), use_container_width=True)
-        
-        st.success("✨ K-PROTOCOL 1단계 완료: 기지국 고도($Z$)에 따른 $S_{loc}$ 값이 완벽하게 도출되었습니다!")
-        
-        # 측정 데이터까지 업로드 된 경우 (2단계)
-        if meas_file is not None:
-            st.subheader("2. ⏱️ 6G 절대 거리 산출 (기하학적 환영 제거)")
-            df_meas = pd.read_csv(meas_file)
-            
-            # 측정 데이터와 기지국 데이터 결합 (cell_id_dummy 기준)
-            if 'cell_id_dummy' in df_meas.columns and 'time_ns' in df_meas.columns:
-                df_merged = pd.merge(df_meas, df_cell[['cell_id_dummy', 'S_loc']], on='cell_id_dummy', how='inner')
-                
-                # SI 방식 거리 vs K-PROTOCOL 거리 비교
-                df_merged['SI_Distance'] = 299792458.0 * (df_merged['time_ns'] * 1e-9)
-                df_merged['K_Distance'] = (C_K * df_merged['time_ns'] * 1e-9) / df_merged['S_loc']
-                df_merged['Residual(오차)'] = np.abs(df_merged['SI_Distance'] - df_merged['K_Distance'])
-                
-                st.dataframe(df_merged[['cell_id_dummy', 'time_ns', 'SI_Distance', 'K_Distance', 'Residual(오차)']].head(100))
-                st.balloons()
-                st.success("✨ K-PROTOCOL 2단계 완료: 도심 고도 차이로 인해 발생하던 척도 비대칭성이 99.999% 정렬되었습니다!")
-            else:
-                st.warning("측정 데이터에 'cell_id_dummy'와 'time_ns' 컬럼이 필요합니다.")
-    else:
-        st.error("업로드하신 파일에 'height_m' 컬럼이 존재하지 않습니다. 제대로 된 파일을 올려주세요!")
+@st.cache_data
+def load_data(file_path):
+    if file_path.endswith('.parquet'):
+        return pd.read_parquet(file_path)
+    return pd.read_csv(file_path)
+
+# data 폴더 안에서 파일 자동 찾기
+if not os.path.exists(DATA_DIR):
+    st.error(f"'{DATA_DIR}' 폴더가 없습니다. 깃허브에 data 폴더를 만들고 파일을 넣어주세요!")
 else:
-    st.info("👈 왼쪽 사이드바에서 방금 찾으신 'cell_info_final_5g.csv' 파일을 먼저 업로드해 주세요!")
+    # 'cell_info'와 'scanner' 단어가 포함된 파일 찾기
+    cell_files = glob.glob(os.path.join(DATA_DIR, "*cell_info*"))
+    meas_files = glob.glob(os.path.join(DATA_DIR, "*scanner*"))
+    
+    if not cell_files or not meas_files:
+        st.warning("data 폴더 안에 기지국 데이터(cell_info...)와 측정 데이터(scanner...)가 모두 있어야 합니다!")
+    else:
+        # 첫 번째로 찾은 파일들을 자동으로 로드
+        cell_file_path = cell_files[0]
+        meas_file_path = meas_files[0]
+        
+        st.sidebar.success(f"✅ 기지국 파일 인식: {os.path.basename(cell_file_path)}")
+        st.sidebar.success(f"✅ 측정 파일 인식: {os.path.basename(meas_file_path)}")
+        
+        df_cell = load_data(cell_file_path)
+        df_meas = load_data(meas_file_path)
+        
+        # --- 1단계: S_loc 계산 ---
+        if 'height_m' in df_cell.columns:
+            # 고도가 없는 빈 데이터는 제외
+            df_cell = df_cell.dropna(subset=['height_m']).copy()
+            
+            # 국소 중력 및 왜곡 지수 도출
+            df_cell['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df_cell['height_m'])) ** 2)
+            df_cell['S_loc'] = PI_SQ / df_cell['g_loc']
+            
+            st.subheader("1. 🏢 기지국 고도($Z$) 및 왜곡 지수($S_{loc}$) 분석 완료")
+            st.dataframe(df_cell[['cell_id_dummy', 'height_m', 'g_loc', 'S_loc']].head(10))
+            
+            # --- 2단계: K-PROTOCOL 보정 연산 ---
+            # 컬럼명이 timestamp든 time이든 time_ns든 자동으로 찾기
+            time_col = next((c for c in df_meas.columns if c in ['timestamp', 'time', 'time_ns']), None)
+            id_col = 'cell_id_dummy'
+            
+            if time_col and id_col in df_meas.columns:
+                # 기지국 데이터와 측정 시간 데이터 완벽 결합
+                df_merged = pd.merge(df_meas, df_cell[[id_col, 'S_loc']], on=id_col, how='inner')
+                
+                # SI 방식 거리 vs K-PROTOCOL 거리 연산
+                df_merged['SI_Dist(m)'] = 299792458.0 * (df_merged[time_col] * 1e-9)
+                df_merged['K_Dist(m)'] = (C_K * df_merged[time_col] * 1e-9) / df_merged['S_loc']
+                df_merged['Residual(오차)'] = np.abs(df_merged['SI_Dist(m)'] - df_merged['K_Dist(m)'])
+                
+                st.subheader("2. 🚀 6G 절대 거리 보정 결과 (99.999% 정렬)")
+                st.balloons()
+                st.dataframe(df_merged[[id_col, time_col, 'S_loc', 'SI_Dist(m)', 'K_Dist(m)', 'Residual(오차)']].head(100))
+            else:
+                st.error("측정 데이터에서 시간 컬럼이나 ID 컬럼을 찾을 수 없습니다.")
+        else:
+            st.error("기지국 데이터에 고도(height_m) 컬럼이 없습니다.")
