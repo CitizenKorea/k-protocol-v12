@@ -6,3 +6,8 @@ plotly
 scipy
 fpdf
 requests
+streamlit
+pandas
+numpy
+pyarrow
+plotly
