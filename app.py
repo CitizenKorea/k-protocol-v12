@@ -28,20 +28,20 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 3. Bilingual Dictionary (한/영 완벽 사전)
+# 3. Bilingual Dictionary
 # ==============================================================================
 i18n = {
     'KOR': {
         'title': "📡 K-PROTOCOL: 6G Omni Analysis Center",
         'subtitle': "#### 도심 공간 왜곡의 기하학적 환영을 99.999% 제거하는 절대 척도 엔진",
         'sb_title1': "📂 1단계: 데이터 업로드",
-        'sb_title2': "⚙️ 2단계: 컬럼 매칭",
+        'sb_title2': "⚙️ 2단계: 컬럼 자동 매칭",
         'f_cell': "1. 기지국 데이터 (cell_info)",
         'f_meas': "2. 측정 데이터 (scanner_meas)",
         'col_c_id': "🏢 기지국 ID 컬럼",
         'col_c_h': "🏢 기지국 고도(Z) 컬럼",
         'col_m_id': "📡 측정 파일 ID 컬럼",
-        'err_empty': "🚨 연산 가능한 유효 데이터가 없습니다. (ID 매칭 실패)",
+        'err_empty': "🚨 연산 가능한 데이터가 없습니다. (ID가 같은지 확인해주세요!)",
         'story_title': "🚨 기존 SI 미터법의 한계와 K-PROTOCOL 보정 증명",
         'm_cell': "분석된 기지국 수",
         'm_max': "최대 추출 왜곡 (1km당)",
@@ -55,13 +55,13 @@ i18n = {
         'title': "📡 K-PROTOCOL: 6G Omni Analysis Center",
         'subtitle': "#### Absolute Metric Engine eliminating 99.999% of geometric illusions",
         'sb_title1': "📂 Step 1: Data Upload",
-        'sb_title2': "⚙️ Step 2: Column Mapping",
+        'sb_title2': "⚙️ Step 2: Auto Mapping",
         'f_cell': "1. Cell Data (cell_info)",
         'f_meas': "2. Measurement Data (scanner_meas)",
         'col_c_id': "🏢 Cell ID Column",
         'col_c_h': "🏢 Cell Altitude (Z) Column",
         'col_m_id': "📡 Measurement ID Column",
-        'err_empty': "🚨 No valid data available for computation. (ID matching failed)",
+        'err_empty': "🚨 No valid data. (Check if IDs match!)",
         'story_title': "🚨 Limits of SI Metric & K-PROTOCOL Calibration",
         'm_cell': "Analyzed Cells",
         'm_max': "Max Distortion (per 1km)",
@@ -73,9 +73,6 @@ i18n = {
     }
 }
 
-# ==============================================================================
-# 4. Interface & Language Toggle
-# ==============================================================================
 col_title, col_lang = st.columns([8, 1])
 with col_lang:
     lang = st.radio("Language", ["KOR", "ENG"], horizontal=True, label_visibility="collapsed")
@@ -86,9 +83,6 @@ with col_title:
     st.markdown(t['subtitle'])
 st.divider()
 
-# ==============================================================================
-# 5. Data Upload & Processing Engine
-# ==============================================================================
 st.sidebar.header(t['sb_title1'])
 f_cell = st.sidebar.file_uploader(t['f_cell'], type=["csv", "parquet"])
 f_meas = st.sidebar.file_uploader(t['f_meas'], type=["csv", "parquet"])
@@ -111,11 +105,19 @@ if f_cell and f_meas:
     st.sidebar.divider()
     st.sidebar.header(t['sb_title2'])
     
-    id_c_col = st.sidebar.selectbox(t['col_c_id'], df_c.columns, index=get_idx(df_c.columns, ['gnb_id', 'cell_id']))
-    h_col = st.sidebar.selectbox(t['col_c_h'], df_c.columns, index=get_idx(df_c.columns, ['height', 'alt', 'z']))
-    id_m_col = st.sidebar.selectbox(t['col_m_id'], df_m.columns, index=get_idx(df_m.columns, ['gnb_id', 'cell_id']))
+    # 💡 [핵심 패치] 두 파일에 공통으로 존재하는 ID 컬럼을 찾아 무조건 1순위로 맞춤!
+    common_cols = list(set(df_c.columns) & set(df_m.columns))
+    id_candidates = [c for c in common_cols if 'id' in c.lower()]
+    # dummy가 붙은 진짜 ID를 최우선으로 찾음
+    best_id = next((c for c in id_candidates if 'dummy' in c.lower()), id_candidates[0] if id_candidates else df_c.columns[0])
+    
+    idx_c = df_c.columns.tolist().index(best_id) if best_id in df_c.columns else 0
+    idx_m = df_m.columns.tolist().index(best_id) if best_id in df_m.columns else 0
 
-    # 데이터 복사본 생성 및 ID 강제 정수 변환 (에러 완전 차단)
+    id_c_col = st.sidebar.selectbox(t['col_c_id'], df_c.columns, index=idx_c)
+    h_col = st.sidebar.selectbox(t['col_c_h'], df_c.columns, index=get_idx(df_c.columns, ['height', 'alt', 'z']))
+    id_m_col = st.sidebar.selectbox(t['col_m_id'], df_m.columns, index=idx_m)
+
     df_c_work = df_c[[id_c_col, h_col]].copy()
     df_m_work = df_m[[id_m_col]].copy()
 
@@ -130,17 +132,14 @@ if f_cell and f_meas:
     df_c_work[h_col] = pd.to_numeric(df_c_work[h_col], errors='coerce')
     df_c_work = df_c_work.dropna(subset=[h_col])
 
-    # 데이터 병합
     df = pd.merge(df_m_work, df_c_work, on='join_id', how='inner')
 
     if not df.empty:
-        # ==============================================================
-        # 💡 1km (1000m) 기준 상대 왜곡량 연산 엔진
-        # ==============================================================
+        # K-PROTOCOL 1km 기준 왜곡량 연산
         df['g_loc'] = G_STD * ((R_EARTH / (R_EARTH + df[h_col])) ** 2)
         df['S_loc'] = PI_SQ / df['g_loc']
         
-        REFERENCE_DIST = 1000.0 # 1km 기준
+        REFERENCE_DIST = 1000.0
         df['SI_Dist'] = REFERENCE_DIST
         df['K_Dist'] = REFERENCE_DIST / df['S_loc']
         df['Correction'] = (df['SI_Dist'] - df['K_Dist']).abs()
@@ -173,12 +172,9 @@ if f_cell and f_meas:
                 if lat and lon:
                     df_plot = df.merge(df_c[[id_c_col, lat, lon]], left_on='join_id', right_on=pd.to_numeric(df_c[id_c_col], errors='coerce').fillna(-1).astype(int), how='left')
                     st.plotly_chart(px.scatter_3d(df_plot, x=lon, y=lat, z=h_col, color='S_loc', template="plotly_white", color_continuous_scale='Turbo'), use_container_width=True)
-                else:
-                    st.warning("위도(Latitude) / 경도(Longitude) 데이터가 없어 3D 맵을 생성할 수 없습니다." if lang=="KOR" else "Missing coordinates for 3D map.")
             with col_b:
                 st.subheader(t['c2_title'])
                 st.caption(t['c2_desc'])
-                # statsmodels ModuleNotFoundError 방지를 위해 trendline="ols" 제거
                 st.plotly_chart(px.scatter(df.sample(min(2000, len(df))), x=h_col, y='Correction', color='S_loc', template="plotly_white"), use_container_width=True)
 
             st.subheader(t['tbl_title'])
